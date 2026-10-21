@@ -23,6 +23,59 @@ import { TerminalHeader } from "@/components/ui/terminal-header";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
+/** Tiempo máximo para cada llamada al backend. */
+const TIMEOUT_FETCH_MS = 15000;
+/** Tiempo máximo para la geolocalización. */
+const TIMEOUT_GEO_MS = 20000;
+
+/**
+ * Error de red con motivo distinguible: la terminal necesita saber si la
+ * petición falló, se quedó colgada o la canceló el usuario.
+ */
+class ErrorDeRed extends Error {
+  constructor(
+    readonly motivo: "timeout" | "cancelado" | "sin-conexion",
+    mensaje: string
+  ) {
+    super(mensaje);
+    this.name = "ErrorDeRed";
+  }
+}
+
+/**
+ * `fetch` con tiempo máximo.
+ *
+ * Sin esto, si el backend no responde la terminal queda en un spinner eterno
+ * sin salida posible. Aborta la petición al cumplirse el plazo y distingue
+ * el timeout de una cancelación hecha por el usuario.
+ */
+async function fetchConTimeout(
+  url: string,
+  init: RequestInit,
+  ms: number,
+  senalExterna?: AbortSignal
+): Promise<Response> {
+  const controller = new AbortController();
+  const idTimeout = setTimeout(() => controller.abort(), ms);
+  const alAbortar = () => controller.abort();
+  senalExterna?.addEventListener("abort", alAbortar);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (senalExterna?.aborted) {
+      throw new ErrorDeRed("cancelado", "Checada cancelada");
+    }
+    if (controller.signal.aborted) {
+      throw new ErrorDeRed("timeout", "El servidor no respondió a tiempo.");
+    }
+    throw new ErrorDeRed("sin-conexion", "No se pudo conectar con el servidor.");
+  } finally {
+    clearTimeout(idTimeout);
+    senalExterna?.removeEventListener("abort", alAbortar);
+  }
+}
+
 type Estado =
   | "inicial"
   | "esperando"
@@ -59,6 +112,8 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
 
   // Evita doble envío si el efecto se re-dispara.
   const registrando = useRef(false);
+  // Permite cancelar la checada en curso (deja la terminal libre).
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let vivo = true;
@@ -73,41 +128,51 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
   }, [params]);
 
   /** Obtiene la info pública del token. Solo lectura: nunca registra nada. */
-  const fetchInfo = useCallback(async (): Promise<boolean> => {
-    if (!token) {
-      setMensaje("Falta el token de checada.");
-      setEstado("error");
-      return false;
-    }
-    if (!API_URL) {
-      setMensaje("Configuración incompleta: falta NEXT_PUBLIC_API_URL.");
-      setEstado("error");
-      return false;
-    }
-
-    try {
-      const res = await fetch(
-        `${API_URL}/api/checar/info?token=${encodeURIComponent(token)}`,
-        { cache: "no-store" }
-      );
-      const json = (await res.json()) as InfoToken;
-
-      if (!json?.valido || !json.nombre) {
-        setMensaje("Token inválido o usuario inactivo.");
+  const fetchInfo = useCallback(
+    async (senal?: AbortSignal): Promise<boolean> => {
+      if (!token) {
+        setMensaje("Falta el token de checada.");
+        setEstado("error");
+        return false;
+      }
+      if (!API_URL) {
+        setMensaje("Configuración incompleta: falta NEXT_PUBLIC_API_URL.");
         setEstado("error");
         return false;
       }
 
-      setNombre(json.nombre);
-      setArea(json.area ?? null);
-      setUltimaMarca(json.ultimaMarca ?? null);
-      return true;
-    } catch {
-      setMensaje("No se pudo conectar con el servidor.");
-      setEstado("error");
-      return false;
-    }
-  }, [token]);
+      try {
+        const res = await fetchConTimeout(
+          `${API_URL}/api/checar/info?token=${encodeURIComponent(token)}`,
+          { cache: "no-store" },
+          TIMEOUT_FETCH_MS,
+          senal
+        );
+        const json = (await res.json()) as InfoToken;
+
+        if (!json?.valido || !json.nombre) {
+          setMensaje("Token inválido o usuario inactivo.");
+          setEstado("error");
+          return false;
+        }
+
+        setNombre(json.nombre);
+        setArea(json.area ?? null);
+        setUltimaMarca(json.ultimaMarca ?? null);
+        return true;
+      } catch (err) {
+        if (err instanceof ErrorDeRed && err.motivo === "cancelado") return false;
+        setMensaje(
+          err instanceof ErrorDeRed
+            ? err.message
+            : "No se pudo conectar con el servidor."
+        );
+        setEstado("error");
+        return false;
+      }
+    },
+    [token]
+  );
 
   /** Solicita la ubicación del navegador. */
   const solicitarUbicacion = useCallback(
@@ -119,7 +184,7 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
         }
         const idTimeout = setTimeout(
           () => reject(new Error("Tiempo de espera agotado")),
-          20000
+          TIMEOUT_GEO_MS
         );
         navigator.geolocation.getCurrentPosition(
           (pos) => {
@@ -130,7 +195,11 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
             clearTimeout(idTimeout);
             reject(err);
           },
-          { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+          {
+            enableHighAccuracy: true,
+            timeout: TIMEOUT_GEO_MS,
+            maximumAge: 0,
+          }
         );
       }),
     []
@@ -138,18 +207,46 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
 
   /** Envía la checada al backend. */
   const enviarChecada = useCallback(
-    async (lat: number, lng: number, accuracy: number) => {
+    async (
+      lat: number,
+      lng: number,
+      accuracy: number,
+      senal?: AbortSignal
+    ) => {
       if (!token) return;
       try {
-        const res = await fetch(`${API_URL}/api/checar`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, lat, lng, accuracy }),
-        });
-        const json = await res.json();
+        const res = await fetchConTimeout(
+          `${API_URL}/api/checar`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, lat, lng, accuracy }),
+          },
+          TIMEOUT_FETCH_MS,
+          senal
+        );
+
+        // El backend puede responder con HTML si hay un error de plataforma:
+        // en ese caso el JSON no se puede leer.
+        let json: {
+          ok?: boolean;
+          tipo?: string;
+          hora?: string;
+          sede?: string | null;
+          distanciaM?: number | null;
+          aviso?: string | null;
+          error?: { motivo?: string; mensaje?: string };
+        };
+        try {
+          json = await res.json();
+        } catch {
+          setMensaje("El servidor devolvió una respuesta inválida.");
+          setEstado("error");
+          return;
+        }
 
         if (json.ok && json.tipo && json.hora) {
-          setTipo(json.tipo);
+          setTipo(json.tipo as "ENTRADA" | "SALIDA");
           setHora(json.hora);
           setSede(json.sede ?? null);
           setDistanciaM(
@@ -164,8 +261,13 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
             error.motivo === "sin ubicacion" ? "sin-ubicacion" : "error"
           );
         }
-      } catch {
-        setMensaje("No se pudo conectar con el servidor.");
+      } catch (err) {
+        if (err instanceof ErrorDeRed && err.motivo === "cancelado") return;
+        setMensaje(
+          err instanceof ErrorDeRed
+            ? err.message
+            : "No se pudo conectar con el servidor."
+        );
         setEstado("error");
       }
     },
@@ -179,22 +281,42 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
     setEstado("esperando");
     setMensaje(null);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const ok = await fetchInfo();
+      const ok = await fetchInfo(controller.signal);
       if (!ok) return;
+      if (controller.signal.aborted) return;
 
       try {
         const pos = await solicitarUbicacion();
+        if (controller.signal.aborted) return;
         const { latitude: lat, longitude: lng, accuracy } = pos.coords;
-        await enviarChecada(lat, lng, accuracy);
+        await enviarChecada(lat, lng, accuracy, controller.signal);
       } catch {
+        if (controller.signal.aborted) return;
         setMensaje("Activa tu ubicación para registrar");
         setEstado("sin-ubicacion");
       }
     } finally {
       registrando.current = false;
+      abortRef.current = null;
     }
   }, [fetchInfo, solicitarUbicacion, enviarChecada]);
+
+  /** Cancela la checada en curso y devuelve la terminal a la pantalla de reposo. */
+  const cancelar = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    registrando.current = false;
+    setEstado("inicial");
+    setTipo(null);
+    setHora(null);
+    setMensaje(null);
+    setAviso(null);
+    window.location.href = "/";
+  }, []);
 
   useEffect(() => {
     if (!listo || !token) return;
@@ -254,6 +376,7 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
             onReintentar={() => {
               void ejecutar();
             }}
+            onCancelar={cancelar}
             onAceptar={() => {
               // La terminal queda lista para la siguiente credencial.
               setEstado("inicial");
