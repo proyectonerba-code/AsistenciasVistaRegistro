@@ -21,7 +21,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChecadaDisplay, PieTerminal } from "@/components/ui/checada-display";
 import { TerminalHeader } from "@/components/ui/terminal-header";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+// Se recorta: una variable de entorno con espacios sobrantes rompería la URL.
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "").trim();
 
 /** Tiempo máximo para cada llamada al backend. */
 const TIMEOUT_FETCH_MS = 15000;
