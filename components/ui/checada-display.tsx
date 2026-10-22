@@ -18,7 +18,7 @@ export interface ChecadaDisplayProps {
   ultimaMarca?: string;
   tipo?: "ENTRADA" | "SALIDA";
   hora?: string;
-  mensaje?: string;
+  mensaje?: string | null;
   aviso?: string | null;
   distanciaM?: number | null;
   sede?: string | null;

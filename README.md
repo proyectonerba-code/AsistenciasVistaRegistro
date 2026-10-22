@@ -16,13 +16,31 @@ se registra la entrada o la salida.
 | Ruta | Qué hace |
 |---|---|
 | `/` | Pantalla de reposo del terminal: "Acerque su tarjeta o sticker NFC". |
-| `/c/[token]` | Checada: pide ubicación, envía la marca y muestra el resultado. |
+| `/c` | **Terminal compartida**: la etiqueta apunta aquí. Pide correo (o nombre) y valida contra la base. |
+| `/c/[token]` | **Credencial personal**: la etiqueta de cada persona. Checada directa, sin preguntar nada. |
+
+### Los dos modos
+
+**`/c` — terminal compartida (la misma etiqueta para todos).**
+1. Se genera una huella del dispositivo y se guarda en el navegador.
+2. Se consulta al backend si ese dispositivo ya está asignado a alguien.
+   - **Sí** → se checa directo, sin preguntar nada.
+   - **No** → se pide el correo (o el nombre, como respaldo) y se valida
+     contra la tabla `usuarios`. El backend devuelve una **sesión de 5 minutos**
+     que autoriza una sola checada. El dispositivo queda vinculado a esa
+     persona y la próxima vez se reconoce solo.
+3. Se pide la ubicación y se registra.
+
+**`/c/[token]` — credencial personal.**
+1. Se consulta el token (solo lectura) para saber el nombre.
+2. Se pide la ubicación y se registra.
+3. El dispositivo también queda vinculado (para poder analizarlo).
 
 ### Flujo de `/c/[token]`
 
 1. `GET /api/checar/info?token=…` — **solo lectura**: nombre, área y última marca.
 2. Se solicita la geolocalización (`enableHighAccuracy`, 20 s de tiempo máximo).
-3. `POST /api/checar` con `{ token, lat, lng, accuracy }`.
+3. `POST /api/checar` con `{ token, lat, lng, accuracy, dispositivo }`.
 4. Resultado:
    - **Éxito** → tarjeta de confirmación: *«Hola, {nombre}»*, área, hora y botón **Aceptar**.
    - **Sin ubicación** → se explica cómo habilitarla y se ofrece **Reintentar**.

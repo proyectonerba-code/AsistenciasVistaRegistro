@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChecadaDisplay, PieTerminal } from "@/components/ui/checada-display";
 import { TerminalHeader } from "@/components/ui/terminal-header";
+import { etiquetaDispositivo, obtenerHuella } from "@/lib/dispositivo";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -144,7 +145,14 @@ export function ChecadaVista({ params }: ChecadaVistaProps): JSX.Element {
         const res = await fetch(`${API_URL}/api/checar`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, lat, lng, accuracy }),
+          body: JSON.stringify({
+            token,
+            lat,
+            lng,
+            accuracy,
+            dispositivo: obtenerHuella(),
+            etiqueta: etiquetaDispositivo(nombre),
+          }),
         });
         const json = await res.json();
 
