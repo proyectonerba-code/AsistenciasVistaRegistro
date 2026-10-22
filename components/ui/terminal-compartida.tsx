@@ -22,7 +22,28 @@ import {
   obtenerHuella,
 } from "@/lib/dispositivo";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "").trim();
+
+/** Tiempo máximo para cada llamada al backend. */
+const TIMEOUT_FETCH_MS = 15000;
+
+/**
+ * `fetch` con tiempo máximo: si el backend no responde, la terminal no se
+ * queda colgada en un spinner eterno.
+ */
+async function fetchConTimeout(
+  url: string,
+  init: RequestInit,
+  ms: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const idTimeout = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(idTimeout);
+  }
+}
 
 type Estado =
   | "iniciando"
@@ -110,19 +131,23 @@ export function TerminalCompartida(): JSX.Element {
         const pos = await solicitarUbicacion();
         const { latitude: lat, longitude: lng, accuracy } = pos.coords;
 
-        const res = await fetch(`${API_URL}/api/checar`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...(opciones.sesion ? { sesion: opciones.sesion } : {}),
-            ...(opciones.persona ? {} : { dispositivo: huella }),
-            lat,
-            lng,
-            accuracy,
-            dispositivo: huella,
-            etiqueta,
-          }),
-        });
+        const res = await fetchConTimeout(
+          `${API_URL}/api/checar`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...(opciones.sesion ? { sesion: opciones.sesion } : {}),
+              ...(opciones.persona ? {} : { dispositivo: huella }),
+              lat,
+              lng,
+              accuracy,
+              dispositivo: huella,
+              etiqueta,
+            }),
+          },
+          TIMEOUT_FETCH_MS
+        );
 
         const json = await res.json();
 
@@ -168,9 +193,10 @@ export function TerminalCompartida(): JSX.Element {
 
     (async () => {
       try {
-        const res = await fetch(
+        const res = await fetchConTimeout(
           `${API_URL}/api/dispositivo?huella=${encodeURIComponent(huella)}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
+          TIMEOUT_FETCH_MS
         );
         const json = await res.json();
 
@@ -200,11 +226,15 @@ export function TerminalCompartida(): JSX.Element {
       setErrorId(null);
 
       try {
-        const res = await fetch(`${API_URL}/api/identificar`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(datos),
-        });
+        const res = await fetchConTimeout(
+          `${API_URL}/api/identificar`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(datos),
+          },
+          TIMEOUT_FETCH_MS
+        );
 
         const json = await res.json();
 

@@ -24,6 +24,8 @@ export interface ChecadaDisplayProps {
   sede?: string | null;
   onReintentar: () => void;
   onAceptar?: () => void;
+  /** Cancela la checada en curso y deja la terminal lista de nuevo. */
+  onCancelar?: () => void;
 }
 
 function IconoCheck({ className = "" }: { className?: string }): JSX.Element {
@@ -79,6 +81,7 @@ export function ChecadaDisplay({
   sede,
   onReintentar,
   onAceptar,
+  onCancelar,
 }: ChecadaDisplayProps): JSX.Element {
   const esExito = estado === "exito";
   const esError = estado === "error" || estado === "sin-ubicacion";
@@ -235,6 +238,16 @@ export function ChecadaDisplay({
             Registrando para{" "}
             <span className="font-semibold text-ink-muted">{nombre}</span>
           </p>
+        )}
+
+        {onCancelar && (
+          <button
+            type="button"
+            onClick={onCancelar}
+            className="u-btn u-btn-ghost mt-6 w-full"
+          >
+            Cancelar
+          </button>
         )}
       </div>
     </div>
