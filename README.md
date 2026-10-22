@@ -105,11 +105,19 @@ Y abrir `http://localhost:3000/c/BRZADF6P5V95` (token de demostración).
 
 ---
 
-## Despliegue (Vercel)
+## Despliegue (Vercel o Netlify)
 
 ```bash
 vercel --prod
+# o
+npx netlify deploy --prod
 ```
 
 Define `NEXT_PUBLIC_API_URL` apuntando al backend desplegado y en el backend
 define `ALLOWED_ORIGIN` con el dominio de esta app (CORS).
+
+> 🔴 `NEXT_PUBLIC_*` se incrusta en el **build**: defínela antes de desplegar
+> y vuelve a desplegar si la cambias.
+
+La guía completa (los 3 repos, orden de despliegue y lista de verificación)
+está en `GUIA-DESPLIEGUE.md`.

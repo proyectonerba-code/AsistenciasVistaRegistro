@@ -1,0 +1,25 @@
+# Configuración de Netlify para la vista de registro.
+#
+# Netlify detecta Next.js automáticamente, pero se declara el plugin
+# explícitamente para que la installation sea reproducible.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Las variables NEXT_PUBLIC_* se incrustan en el BUILD: deben estar
+  # definidas en Site settings > Environment variables ANTES de desplegar.
+  #   NEXT_PUBLIC_API_URL = https://tu-backend.vercel.app
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Cabeceras de seguridad básicas para la terminal.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
