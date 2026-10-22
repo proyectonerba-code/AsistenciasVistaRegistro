@@ -5,7 +5,7 @@
   "description": "Vista pública de escaneo por NFC/QR (/c/[token]). Se conecta al backend vía HTTP.",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next-on-pages && next build",
     "start": "next start",
     "lint": "tsc --noEmit"
   },
@@ -15,6 +15,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@cloudflare/next-on-pages": "^1.13.16",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
