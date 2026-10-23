@@ -34,3 +34,10 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Cloudflare Workers / OpenNext
+.open-next/
+.wrangler/
+.dryrun/
+.deploy-temp/
+

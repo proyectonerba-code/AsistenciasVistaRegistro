@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "asistencias-registro",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-10-23",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "NEXT_PUBLIC_API_URL": "https://asistencias-backend.proyectonerba.workers.dev",
+    "NEXT_PUBLIC_REGISTRO_URL": "https://asistencias-registro.proyectonerba.workers.dev"
+  }
+}
