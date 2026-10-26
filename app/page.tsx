@@ -1,18 +1,17 @@
 "use client";
 
 /**
- * Pantalla principal de checada — flujo simple y directo.
+ * Pantalla principal de checada — flujo automático.
  *
  * Flujo:
- *  1. Al entrar, pide ubicación del navegador.
- *  2. Obtiene la huella del dispositivo (celular).
- *  3. Consulta al backend si ese dispositivo ya está asociado a un nombre.
- *  4. Si está asociado → muestra el nombre y permite checar entrada/salida.
- *  5. Si NO está asociado → muestra "No asociado, pregunta en administración".
- *  6. Solo permite registrar si está dentro de la geocerca fija.
- *
- * Geocerca fija: 20°04'22.6"N 98°23'06.9"W  ->  20.0729444, -98.38525
- * Radio: 150 metros.
+ *  1. Al entrar se detecta la huella del dispositivo y la ubicación del navegador.
+ *  2. Se consulta al backend si el dispositivo ya está asociado a un colaborador.
+ *  3. Si NO está asociado → "No asociado, comunícate con administración".
+ *  4. Si está asociado y hay ubicación válida → se registra la entrada/salida
+ *     automáticamente (sin botones). Resultado: nombre, hora y "Ya puedes cerrar
+ *     la ventana".
+ *  5. Si la ubicación está fuera de la geocerca (o no se obtuvo) → no se
+ *     registra nada.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,8 +23,8 @@ const API_URL =
   (typeof window !== "undefined" ? window.location.origin : "");
 
 /** Geocerca fija: Oficina Central */
-const GEOCERCA_LAT = 20.0729444; // 20°04'22.6"N
-const GEOCERCA_LNG = -98.38525; // 98°23'06.9"W
+const GEOCERCA_LAT = 20.0729444;
+const GEOCERCA_LNG = -98.38525;
 const GEOCERCA_RADIO_M = 150;
 
 const TIMEOUT_FETCH_MS = 15000;
@@ -65,9 +64,8 @@ async function fetchConTimeout(
   }
 }
 
-/** Calcula distancia Haversine en metros entre dos puntos. */
 function haversineMetros(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000; // radio de la Tierra en metros
+  const R = 6371000;
   const rad = (x: number) => (x * Math.PI) / 180;
   const dLat = rad(lat2 - lat1);
   const dLng = rad(lng2 - lng1);
@@ -80,11 +78,11 @@ function haversineMetros(lat1: number, lng1: number, lat2: number, lng2: number)
 
 type Estado =
   | "iniciando"
-  | "pedir-ubicacion"
   | "asociado"
-  | "no-asociado"
-  | "checando"
+  | "registrando"
   | "exito"
+  | "no-asociado"
+  | "sin-ubicacion"
   | "error";
 
 interface UsuarioAsociado {
@@ -92,6 +90,11 @@ interface UsuarioAsociado {
   nombre: string;
   correo: string;
   area: string;
+}
+
+function formatoHora(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 export default function HomePage(): JSX.Element {
@@ -102,13 +105,18 @@ export default function HomePage(): JSX.Element {
   const [hora, setHora] = useState<string | null>(null);
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [distanciaM, setDistanciaM] = useState<number | null>(null);
-  const [cargando, setCargando] = useState(false);
   const [ubicacion, setUbicacion] = useState<{ lat: number; lng: number } | null>(null);
+  const [reloj, setReloj] = useState(new Date());
 
   const registrando = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const yaRegistro = useRef(false);
 
-  /** Pide la ubicación del navegador. */
+  useEffect(() => {
+    const id = setInterval(() => setReloj(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const solicitarUbicacion = useCallback(
     (): Promise<GeolocationPosition> =>
       new Promise((resolve, reject) => {
@@ -135,11 +143,10 @@ export default function HomePage(): JSX.Element {
     []
   );
 
-  /** Consulta si el dispositivo está asociado a un usuario. */
-  const consultarDispositivo = useCallback(async () => {
+  const consultarDispositivo = useCallback(async (h: string) => {
     try {
       const res = await fetchConTimeout(
-        `${API_URL}/api/dispositivo?huella=${encodeURIComponent(huella)}`,
+        `${API_URL}/api/dispositivo?huella=${encodeURIComponent(h)}`,
         { cache: "no-store" },
         TIMEOUT_FETCH_MS
       );
@@ -159,11 +166,10 @@ export default function HomePage(): JSX.Element {
     } catch {
       setEstado("no-asociado");
     }
-  }, [huella]);
+  }, []);
 
-  /** Envía la checada al backend. */
   const enviarChecada = useCallback(async () => {
-    if (!usuario || !ubicacion) return;
+    if (!usuario || yaRegistro.current) return;
     if (registrando.current) return;
     registrando.current = true;
 
@@ -171,22 +177,26 @@ export default function HomePage(): JSX.Element {
     abortRef.current = controller;
 
     try {
-      setEstado("checando");
-      setMensaje(null);
+      if (!ubicacion) {
+        setMensaje("Activa tu ubicación para registrar la asistencia.");
+        setEstado("sin-ubicacion");
+        return;
+      }
 
       const { lat, lng } = ubicacion;
-
-      // Verificar geocerca antes de enviar
       const d = haversineMetros(lat, lng, GEOCERCA_LAT, GEOCERCA_LNG);
       setDistanciaM(d);
 
       if (d > GEOCERCA_RADIO_M) {
         setMensaje(
-          `Estás a ${Math.round(d)} m de la oficina. Solo puedes registrarte dentro de los 150 m de la sede.`
+          `Estás a ${Math.round(d)} m de la oficina. Solo puedes registrar dentro de los ${GEOCERCA_RADIO_M} m de la sede.`
         );
         setEstado("error");
         return;
       }
+
+      setEstado("registrando");
+      setMensaje(null);
 
       const etiqueta = etiquetaDispositivo(usuario.nombre);
 
@@ -210,6 +220,7 @@ export default function HomePage(): JSX.Element {
       const json = await res.json();
 
       if (json.ok && json.tipo && json.hora) {
+        yaRegistro.current = true;
         setTipo(json.tipo as "ENTRADA" | "SALIDA");
         setHora(json.hora);
         setEstado("exito");
@@ -227,9 +238,15 @@ export default function HomePage(): JSX.Element {
     } finally {
       registrando.current = false;
       abortRef.current = null;
-      setCargando(false);
     }
   }, [usuario, ubicacion, huella]);
+
+  // Auto-registro cuando el dispositivo está asociado y ya tenemos ubicación.
+  useEffect(() => {
+    if (estado === "asociado" && usuario && ubicacion && !yaRegistro.current) {
+      void enviarChecada();
+    }
+  }, [estado, usuario, ubicacion, enviarChecada]);
 
   useEffect(() => {
     let vivo = true;
@@ -239,20 +256,17 @@ export default function HomePage(): JSX.Element {
       if (!vivo) return;
       setHuella(h);
 
-      // Pedir ubicación
       try {
         const pos = await solicitarUbicacion();
-        setUbicacion({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        });
+        if (!vivo) return;
+        setUbicacion({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       } catch {
-        // Si no da ubicación, mostramos error pero igual consultamos dispositivo
+        if (!vivo) return;
         setUbicacion(null);
       }
 
       if (!vivo) return;
-      await consultarDispositivo();
+      await consultarDispositivo(h);
     })();
 
     return () => {
@@ -260,15 +274,13 @@ export default function HomePage(): JSX.Element {
     };
   }, [solicitarUbicacion, consultarDispositivo]);
 
-  /* ---------------------------------------------------------------- */
-  /* Render                                                             */
-  /* ---------------------------------------------------------------- */
+  /* ------------------------------ Render ------------------------------ */
 
   if (estado === "iniciando") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas">
         <div className="text-center">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary/20 border-t-primary mx-auto mb-4" />
+          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-primary/20 border-t-primary" />
           <p className="text-sm text-ink-muted">Cargando…</p>
         </div>
       </div>
@@ -277,177 +289,177 @@ export default function HomePage(): JSX.Element {
 
   return (
     <div className="flex min-h-screen flex-col bg-canvas">
-      <header className="u-glass sticky top-0 z-20 border-b border-black/5">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <Logo height={26} />
+      {/* Header estilo stitch */}
+      <header className="fixed top-0 left-0 right-0 z-50 bg-surface/90 backdrop-blur-md shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
+        <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6 lg:px-12">
           <div className="flex items-center gap-3">
-            <span className="u-badge u-badge-success">
-              <span className="u-dot" /> Sistema activo
-            </span>
+            <Logo height={32} />
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+              Terminal activa
+            </div>
+            <div className="font-mono text-base font-bold tracking-tight text-ink">
+              {formatoHora(reloj)}
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="flex flex-1 items-center justify-center px-4 py-10 sm:py-16">
-        <div className="w-full max-w-lg">
-
+      <main className="flex flex-1 items-center justify-center px-4 pt-20 pb-10 sm:px-8">
+        <div className="w-full max-w-xl">
           {/* --- No asociado --- */}
           {estado === "no-asociado" && (
-            <div className="u-card p-8 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600 mb-6">
+            <div className="rounded-xl bg-surface p-6 text-center shadow-xl sm:p-8">
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-amber-50 text-amber-600">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10" />
                   <path d="M12 8v4" />
                   <path d="M12 16h.01" />
                 </svg>
               </div>
-
-              <h1 className="u-display text-2xl font-bold text-ink mb-2">
+              <h1 className="font-jakarta text-2xl font-bold tracking-tight text-ink">
                 No asociado
               </h1>
-              <p className="text-sm text-ink-muted mb-6">
-                Este celular aún no está registrado en el sistema.
+              <p className="mt-2 text-sm text-ink-muted">
+                Este dispositivo aún no está vinculado a un colaborador.
               </p>
-              <p className="text-base font-semibold text-primary mb-8">
-                Pregunta en administración para que te asocien a un nombre.
+              <p className="mt-6 text-base font-semibold text-primary">
+                Comunícate con administración para que te asocien a un nombre.
               </p>
 
-              <div className="u-card p-4 bg-surface-muted text-center">
-                <p className="text-xs text-ink-subtle mb-3">
-                  Información del dispositivo:
-                </p>
-                <p className="u-mono text-xs text-ink-muted truncate" title={huella}>
-                  {huella.slice(0, 12)}…
+              <div className="mt-8 rounded-lg bg-surface-muted p-4 text-center">
+                <p className="mb-2 text-xs text-ink-subtle">Información del dispositivo</p>
+                <p className="u-mono truncate text-xs text-ink-muted" title={huella}>
+                  {huella.slice(0, 16)}…
                 </p>
               </div>
             </div>
           )}
 
-          {/* --- Asociado: mostrar nombre y checar --- */}
-          {estado === "asociado" && usuario && (
-            <div className="u-card p-8 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 mb-6">
+          {/* --- Asociado / registrando --- */}
+          {(estado === "asociado" || estado === "registrando") && usuario && (
+            <div className="rounded-xl bg-surface p-6 text-center shadow-xl sm:p-8">
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                   <circle cx="8.5" cy="7" r="4" />
-                  <line x1="18" y1="8" x2="23" y2="13" />
-                  <line x1="18" y1="13" x2="23" y2="8" />
                 </svg>
               </div>
-
-              <h1 className="u-display text-2xl font-bold text-ink mb-1">
+              <h1 className="font-jakarta text-2xl font-bold tracking-tight text-ink">
                 Hola, {usuario.nombre}
               </h1>
-              <p className="text-sm text-ink-muted mb-2">{usuario.area}</p>
-              <p className="u-mono text-xs text-ink-subtle mb-6">
-                {usuario.correo}
-              </p>
+              <p className="text-sm text-ink-muted">{usuario.area}</p>
+              <p className="u-mono mt-1 text-xs text-ink-subtle">{usuario.correo}</p>
 
-              {/* Estado de ubicación / geocerca */}
+              <div className="my-6 rounded-lg bg-surface-muted py-4 px-6">
+                <p className="text-sm font-semibold text-ink-muted">
+                  {estado === "registrando" ? "Registrando tu asistencia…" : "Preparando registro…"}
+                </p>
+                <div className="mx-auto mt-3 h-8 w-8 animate-spin rounded-full border-4 border-primary/20 border-t-primary" />
+              </div>
+
               {ubicacion && (
-                <div className="mb-6 p-3 rounded-lg border border-line bg-surface">
-                  <p className="text-xs font-medium text-ink-muted mb-1">
-                    Ubicación detectada
-                  </p>
+                <div className="mb-4 rounded-lg border border-line bg-surface p-3">
+                  <p className="mb-1 text-xs font-medium text-ink-muted">Ubicación detectada</p>
                   <p className="u-mono text-xs text-ink">
                     {ubicacion.lat.toFixed(6)}, {ubicacion.lng.toFixed(6)}
                   </p>
                   {distanciaM !== null && (
-                    <p className="text-xs text-ink-muted mt-1">
+                    <p className="mt-1 text-xs text-ink-muted">
                       A {Math.round(distanciaM)} m de la oficina
                     </p>
                   )}
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={enviarChecada}
-                disabled={cargando || !ubicacion}
-                className={`u-btn w-full mb-3 ${
-                  cargando || !ubicacion
-                    ? "u-btn-secondary opacity-50 cursor-not-allowed"
-                    : "u-btn-primary"
-                }`}
-              >
-                {cargando ? "Registrando…" : !ubicacion ? "Esperando ubicación…" : "Registrar entrada / salida"}
-              </button>
-
-              <p className="text-xs text-ink-subtle">
-                Solo puedes registrarte dentro de los 150 m de la oficina.
-              </p>
-            </div>
-          )}
-
-          {/* --- Checando / Procesando --- */}
-          {estado === "checando" && (
-            <div className="u-card p-8 text-center">
-              <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary/20 border-t-primary mx-auto mb-4" />
-              <p className="text-sm text-ink-muted">Registrando tu asistencia…</p>
-              {usuario && <p className="text-xs text-ink-subtle mt-2">{usuario.nombre}</p>}
+              {!ubicacion && (
+                <p className="text-xs text-ink-subtle">
+                  No se pudo obtener la ubicación. Activa el GPS y recarga la página.
+                </p>
+              )}
             </div>
           )}
 
           {/* --- Éxito --- */}
           {estado === "exito" && tipo && hora && (
-            <div className="u-card p-8 text-center">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 mb-6">
-                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <div className="rounded-xl bg-surface p-6 text-center shadow-xl sm:p-8">
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
               </div>
-
-              <h1 className="u-display text-2xl font-bold text-ink mb-2">
+              <h1 className="font-jakarta text-2xl font-bold tracking-tight text-ink">
                 ¡Registro exitoso!
               </h1>
-              <p className="text-sm text-ink-muted mb-4">
-                Hola, {usuario?.nombre}
-              </p>
-              <div className="rounded-lg bg-surface-muted px-4 py-3 mb-6">
+              <p className="mt-2 text-sm text-ink-muted">Hola, {usuario?.nombre}</p>
+              <div className="my-6 rounded-lg bg-surface-muted px-4 py-3">
                 <p className="text-base font-semibold text-emerald-700">
                   {tipo === "SALIDA" ? "Salida" : "Entrada"} registrada a las{" "}
                   <span className="u-mono tnum">{hora}</span> hrs
                 </p>
               </div>
+              <p className="text-base font-bold text-primary">
+                Ya puedes cerrar la ventana.
+              </p>
+            </div>
+          )}
 
+          {/* --- Sin ubicación --- */}
+          {estado === "sin-ubicacion" && (
+            <div className="rounded-xl bg-surface p-6 text-center shadow-xl sm:p-8">
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-amber-50 text-amber-600">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 8v4" />
+                  <path d="M12 16h.01" />
+                </svg>
+              </div>
+              <h1 className="font-jakarta text-xl font-bold tracking-tight text-ink">
+                Ubicación requerida
+              </h1>
+              <p className="mt-2 text-sm text-ink-muted">
+                {mensaje ?? "Activa tu ubicación para registrar la asistencia."}
+              </p>
               <button
                 type="button"
                 onClick={() => {
                   setEstado("asociado");
-                  setTipo(null);
-                  setHora(null);
                   setMensaje(null);
                 }}
-                className="u-btn u-btn-primary w-full"
+                className="u-btn u-btn-primary mt-6 w-full"
               >
-                Volver
+                Reintentar
               </button>
             </div>
           )}
 
           {/* --- Error --- */}
           {estado === "error" && mensaje && (
-            <div className="u-card p-8 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary-wash text-primary mb-6">
+            <div className="rounded-xl bg-surface p-6 text-center shadow-xl sm:p-8">
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-primary-wash text-primary">
                 <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10" />
                   <path d="M12 8v4" />
                   <path d="M12 16h.01" />
                 </svg>
               </div>
-
-              <h1 className="u-display text-xl font-bold text-ink mb-2">
+              <h1 className="font-jakarta text-xl font-bold tracking-tight text-ink">
                 No se pudo registrar
               </h1>
-              <p className="text-sm text-ink-muted mb-6">{mensaje}</p>
-
+              <p className="mt-2 text-sm text-ink-muted">{mensaje}</p>
               <button
                 type="button"
                 onClick={() => {
-                  setEstado("asociado");
-                  setMensaje(null);
+                  if (usuario) {
+                    setEstado("asociado");
+                    setMensaje(null);
+                  } else {
+                    window.location.reload();
+                  }
                 }}
-                className="u-btn u-btn-primary w-full"
+                className="u-btn u-btn-primary mt-6 w-full"
               >
                 Intentar de nuevo
               </button>

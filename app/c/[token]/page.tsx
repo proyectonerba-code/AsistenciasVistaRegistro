@@ -7,11 +7,12 @@ import { ChecadaVista } from "./checada-vista";
  * Server Component: solo pasa los params a la vista cliente, que se encarga
  * del layout completo (cabecera de terminal + tarjeta de resultado).
  */
-export default function ChecadaPage({
+export default async function ChecadaPage({
   params,
 }: {
-  params: { token?: string } | Promise<{ token?: string }>;
+  params: Promise<{ token?: string }>;
 }) {
+  const resolved = await params;
   return (
     <Suspense
       fallback={
@@ -21,7 +22,7 @@ export default function ChecadaPage({
         </div>
       }
     >
-      <ChecadaVista params={params} />
+      <ChecadaVista params={Promise.resolve(resolved)} />
     </Suspense>
   );
 }
